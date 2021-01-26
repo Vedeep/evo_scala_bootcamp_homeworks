@@ -16,15 +16,15 @@ class BasicsSpec extends AnyFlatSpec {
     gcd(0, 0) shouldEqual 0
   }
 
-  "lcd" should "find Lowest common denominator" in {
-    lcd(6, 12) shouldEqual 12
-    lcd(54, 24) shouldEqual 216
-    lcd(42, 56) shouldEqual 168
-    lcd(18, 84) shouldEqual 252
-    lcd(48, 18) shouldEqual 144
-    lcd(15, 0) shouldEqual 15
-    lcd(0, 11) shouldEqual 11
-    lcd(0, 0) shouldEqual 0
+  "lcm" should "find Lowest common denominator" in {
+    lcm(6, 12) shouldEqual 12
+    lcm(54, 24) shouldEqual 216
+    lcm(42, 56) shouldEqual 168
+    lcm(18, 84) shouldEqual 252
+    lcm(48, 18) shouldEqual 144
+    lcm(15, 0) shouldEqual 15
+    lcm(0, 11) shouldEqual 11
+    lcm(0, 0) shouldEqual 0
   }
 }
 
