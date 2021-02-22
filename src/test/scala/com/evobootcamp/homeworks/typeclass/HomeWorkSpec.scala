@@ -31,6 +31,7 @@ class HomeWorkSpec extends AnyFlatSpec with ScalaCheckDrivenPropertyChecks {
 
   "Entity" should "has '===' method" in {
     import Task4._
+    import Task4.Equality._
 
     sealed case class Test(a: String, b: Int)
 
@@ -45,6 +46,7 @@ class HomeWorkSpec extends AnyFlatSpec with ScalaCheckDrivenPropertyChecks {
 
   "Iterable" should "has myFlatMap method" in {
     import AdvancedHomework._
+    import AdvancedHomework.CustomFlatMap._
 
     List(1, 2, 3).myFlatMap(x => List(x + 2)) shouldEqual List(1, 2, 3).flatMap(x => List(x + 2))
     List(1, 2, 3).myFlatMap(List(_)) shouldEqual List(1, 2, 3).flatMap(List(_))

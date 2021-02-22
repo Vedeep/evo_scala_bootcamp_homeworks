@@ -56,24 +56,44 @@ object Task3 extends App {
 
 object Task4 extends App {
 
-  trait Equals[T] {
-    def ===(entity: T): Boolean
+  trait Equals[-T] {
+    def ===(entity: T, entity2: T): Boolean
   }
 
-  implicit class EqualsSyntax[A](fromEntity: A) {
-    def ===(toEntity: A): Boolean = fromEntity equals toEntity
+  object Equals {
+    def apply[F](implicit instance: Equals[F]): Equals[F] = instance
+  }
+
+  implicit class EqualsSyntax[A: Equals](fromEntity: A) {
+    def ===(toEntity: A): Boolean = Equals[A].===(fromEntity, toEntity)
+  }
+
+  object Equality {
+    implicit val anyEquals: Equals[Any] =
+      (entity: Any, entity2: Any) => entity equals entity2
   }
 
 }
 
 object AdvancedHomework extends App {
 
-  trait MyFlatMap[T] {
-    def myFlatMap(f: T => IterableOnce[T]): T
+  trait MyFlatMap[T[_]] {
+    def myFlatMap[A, B](x: T[A])(f: A => IterableOnce[B]): T[B]
   }
 
-  implicit class MyFlatMapSyntax[A](entity: Iterable[A]) {
-    def myFlatMap(f: A => IterableOnce[A]): Iterable[A] = entity.map(f).flatten
+  object MyFlatMap {
+    def apply[F[_]](implicit instance: MyFlatMap[F]): MyFlatMap[F] = instance
   }
-  
+
+  implicit class MyFlatMapSyntax[A[_]: MyFlatMap, B](entity: A[B]) {
+    def myFlatMap[C](f: B => IterableOnce[C]): A[C] = MyFlatMap[A].myFlatMap(entity)(f)
+  }
+
+  object CustomFlatMap {
+    implicit val iterableFlatMap: MyFlatMap[List] = new MyFlatMap[List] {
+      override def myFlatMap[A, B](entity: List[A])(f: A => IterableOnce[B]): List[B]
+      = entity.flatMap(f)
+    }
+  }
+
 }
