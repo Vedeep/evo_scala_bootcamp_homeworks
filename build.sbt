@@ -26,10 +26,15 @@ version := "1.0"
 // You can define other libraries as dependencies in your build like this:
 
 val scalaTestVersion = "3.1.0.0-RC2"
+val catsVersion = "2.2.0"
+val catsTaglessVersion = "0.11"
+val catsEffectVersion = "2.2.0"
 
 libraryDependencies += "org.scala-lang.modules" %% "scala-parser-combinators" % "1.1.2"
 libraryDependencies += "org.scalatestplus" %% "scalatestplus-scalacheck" % scalaTestVersion % Test
 libraryDependencies += "org.scalatestplus" %% "selenium-2-45" % scalaTestVersion % Test
+libraryDependencies += "org.typelevel" %% "cats-core" % catsVersion
+libraryDependencies += "org.typelevel" %% "cats-effect" % catsEffectVersion
 
 // Here, `libraryDependencies` is a set of dependencies, and by using `+=`,
 // we're adding the scala-parser-combinators dependency to the set of dependencies
