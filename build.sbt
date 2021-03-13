@@ -2,6 +2,7 @@
 // The simplest possible sbt build file is just one line:
 
 scalaVersion := "2.13.3"
+coverageExcludedPackages := "com.evobootcamp.homeworks.basics;com.evobootcamp.homeworks.adt"
 // That is, to create a valid sbt build, all you've got to do is define the
 // version of Scala you'd like your project to use.
 
