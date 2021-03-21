@@ -17,17 +17,7 @@ object Excercises {
 
     def apply[A,B](fab: F[A => B])(fa: F[A]): F[B] = map2(fab, fa)(_(_))
 
-    def sequence[A](fas: List[F[A]]): F[List[A]] = {
-      @tailrec
-      def makeList(list: F[List[A]], fas: List[F[A]]): F[List[A]] = {
-        fas match {
-          case Nil => list
-          case x :: xs => makeList(map2(x, list)(_ :: _), xs)
-        }
-      }
-
-      makeList(unit(List()), fas)
-    }
+    def sequence[A](fas: List[F[A]]): F[List[A]] = traverse(fas)(a => a)
 
     def traverse[A,B](as: List[A])(f: A => F[B]): F[List[B]] = sequence(as.map(f))
   }
