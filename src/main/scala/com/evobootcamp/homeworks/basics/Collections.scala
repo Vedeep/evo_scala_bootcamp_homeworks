@@ -1,5 +1,9 @@
 package com.evobootcamp.homeworks.basics
 
+import java.time.LocalDate
+import java.time.chrono.IsoChronology
+import java.time.format.{DateTimeFormatter, DateTimeFormatterBuilder, ResolverStyle, SignStyle}
+import java.time.temporal.ChronoField
 import scala.annotation.tailrec
 
 object Collections {
@@ -129,4 +133,41 @@ object Collections {
   }).toList.map({
     case (i, v) => (v.toSet, i)
   })
+
+  object Solution {
+    def twoSum(nums: Array[Int], target: Int): Array[Int] = {
+      var res = Array[Int]()
+      val nums1 = nums.zipWithIndex
+      val nums2 = nums1.drop(1)
+
+      nums1.forall(n1 => {
+        nums2.forall(n2 => {
+          if (n1._2 != n2._2 && n1._1 + n2._1 == target) {
+            res = res.appendedAll(Array(n1._2, n2._2))
+            false
+          } else {
+            true
+          }
+        })
+
+        if (res.length == 0) {
+          true
+        } else {
+          false
+        }
+      })
+
+      res
+    }
+  }
+
+  def main(args: Array[String]): Unit = {
+    val format = new DateTimeFormatterBuilder()
+      .appendValue(ChronoField.YEAR, 4)
+      .appendValue(ChronoField.MONTH_OF_YEAR, 2)
+      .appendValue(ChronoField.DAY_OF_MONTH, 2)
+      .toFormatter()
+
+    println(LocalDate.parse("20190215", format))
+  }
 }
