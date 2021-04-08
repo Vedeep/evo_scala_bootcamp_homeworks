@@ -99,8 +99,8 @@ object EffectsHomework2 {
   }
 
   sealed trait ThreadPool[F[_]] {
-    def delay[A](thunk: => A)(implicit sync: Sync[F], cs: ContextShift[F]): F[Fiber[F, A]]
-    def shutdown(implicit sync: Sync[F]): F[Unit]
+    def delay[A](thunk: => A): F[Fiber[F, A]]
+    def shutdown: F[Unit]
   }
 
   sealed trait Storage[F[_], T] {
@@ -123,7 +123,8 @@ object EffectsHomework2 {
     } yield mp.get(key)
   }
 
-  abstract class PoolImpl[F[_]](private val poolSize: Int = 4) extends ThreadPool[F] {
+  abstract class PoolImpl[F[_]](private val poolSize: Int = 4)(implicit sync: Sync[F], cs: ContextShift[F])
+  extends ThreadPool[F] {
     private[effects] val pool: ExecutorService = Executors.newFixedThreadPool(poolSize)
     private[effects] val executionContext: ExecutionContextExecutor
       = ExecutionContext.fromExecutor(pool)
@@ -131,14 +132,13 @@ object EffectsHomework2 {
 
     def start[A](fa: F[A]): F[Fiber[F, A]]
 
-    override def delay[A](thunk: => A)(implicit sync: Sync[F], cs: ContextShift[F]): F[Fiber[F, A]]
+    override def delay[A](thunk: => A): F[Fiber[F, A]]
       = start(blocker.delay[F, A](thunk))
 
-    override def shutdown(implicit sync: Sync[F]): F[Unit] = Sync[F].delay(pool.shutdown)
+    override def shutdown: F[Unit] = Sync[F].delay(pool.shutdown)
   }
 
-  class ConsoleImpl[F[_]](val pool: ThreadPool[F])(implicit sync: Sync[F], cs: ContextShift[F])
-  extends Console[F] {
+  class ConsoleImpl[F[_]](private val pool: ThreadPool[F])(implicit sync: Sync[F]) extends Console[F] {
     override def readLine: F[Fiber[F, String]]
       = pool.delay(StdIn.readLine)
 
@@ -172,8 +172,7 @@ object EffectsHomework2 {
       = Either.cond(data.nonEmpty, data, ValidationError.EmptyFile)
   }
 
-  class HashImpl[F[_]](pool: ThreadPool[F])(implicit sync: Sync[F], cs: ContextShift[F])
-  extends Hash[F, HashItem] {
+  class HashImpl[F[_]](private val pool: ThreadPool[F])(implicit sync: Sync[F]) extends Hash[F, HashItem] {
     override def getMinHash(text: String, seed: Int): F[HashItem] = for {
       words <- Sync[F].pure(text.split("[\\s\\t\\n]+").toList)
       hashes <- words.traverse(word => getWordHash(word, seed).map(HashItem(word, _)))
@@ -205,12 +204,12 @@ object EffectsHomework2 {
   }
 
   class HashApp[F[_]](
-    val fileReader: FileReader[F],
-    val console: Console[F],
-    val validator: Validator,
-    val hash: Hash[F, HashItem],
-    val storage: Storage[F, HashItem]
-  )(implicit sync: Sync[F], cs: ContextShift[F], met: MonadError[F, Throwable]) {
+    private val fileReader: FileReader[F],
+    private val console: Console[F],
+    private val validator: Validator,
+    private val hash: Hash[F, HashItem],
+    private val storage: Storage[F, HashItem]
+  )(implicit met: MonadError[F, Throwable]) {
     private val storageKey: String = "min-hash"
     private def storeMinHash(hash: HashItem): F[Unit]
       = storage.set(storageKey, hash)
