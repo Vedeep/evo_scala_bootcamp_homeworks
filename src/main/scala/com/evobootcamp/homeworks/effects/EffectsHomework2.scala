@@ -1,10 +1,10 @@
 package com.evobootcamp.homeworks.effects
 
-import cats.{Applicative, ApplicativeError, Apply, Monad, MonadError}
+import cats.effect.concurrent.Ref
+import cats.{MonadError}
 import cats.effect.{Blocker, ContextShift, ExitCode, Fiber, IO, IOApp, Resource, Sync}
 import cats.implicits._
 
-import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.{ExecutorService, Executors}
 import scala.concurrent.{ExecutionContext, ExecutionContextExecutor}
 import scala.io.{Source, StdIn}
@@ -65,7 +65,7 @@ object EffectsHomework2App extends IOApp {
   override def run(args: List[String]): IO[ExitCode] = for {
     minHash <- app.run()
     _ <- console.printLine(minHash.toString)
-    _ <- pool.shutdown()
+    _ <- pool.shutdown
   } yield ExitCode.Success
 }
 
@@ -100,7 +100,7 @@ object EffectsHomework2 {
 
   sealed trait ThreadPool[F[_]] {
     def delay[A](thunk: => A)(implicit sync: Sync[F], cs: ContextShift[F]): F[Fiber[F, A]]
-    def shutdown(): F[Unit]
+    def shutdown(implicit sync: Sync[F]): F[Unit]
   }
 
   sealed trait Storage[F[_], T] {
@@ -108,22 +108,22 @@ object EffectsHomework2 {
     def get(key: String): F[Option[T]]
   }
 
-  sealed class HashStorage[F[_]](implicit ap: Applicative[F]) extends Storage[F, HashItem] {
-    val store: AtomicReference[Map[String, HashItem]] = new AtomicReference(Map())
+  sealed class HashStorage[F[_]](implicit sync: Sync[F]) extends Storage[F, HashItem] {
+    lazy val storeMap: Ref[F, Map[String, HashItem]] = Ref.unsafe(Map.empty)
+    val store: F[Ref[F, Map[String, HashItem]]] = Sync[F].delay(storeMap)
 
-    override def set(key: String, item: HashItem): F[Unit] = {
-      Applicative[F].pure(store.getAndUpdate(_ + (key -> item)))
-    }
+    override def set(key: String, item: HashItem): F[Unit] = for {
+      ref <- store
+      _ <- ref.getAndUpdate(_ + (key -> item))
+    } yield ()
 
-    override def get(key: String): F[Option[HashItem]] = {
-      Applicative[F].pure(store.get().get(key))
-    }
+    override def get(key: String): F[Option[HashItem]] = for {
+      ref <- store
+      mp <- ref.get
+    } yield mp.get(key)
   }
 
-  abstract class PoolImpl[F[_]]
-  (private val poolSize: Int = 4)
-  (implicit ap: Applicative[F])
-  extends ThreadPool[F] {
+  abstract class PoolImpl[F[_]](private val poolSize: Int = 4) extends ThreadPool[F] {
     private[effects] val pool: ExecutorService = Executors.newFixedThreadPool(poolSize)
     private[effects] val executionContext: ExecutionContextExecutor
       = ExecutionContext.fromExecutor(pool)
@@ -134,25 +134,25 @@ object EffectsHomework2 {
     override def delay[A](thunk: => A)(implicit sync: Sync[F], cs: ContextShift[F]): F[Fiber[F, A]]
       = start(blocker.delay[F, A](thunk))
 
-    override def shutdown(): F[Unit] = Applicative[F].pure(pool.shutdown)
+    override def shutdown(implicit sync: Sync[F]): F[Unit] = Sync[F].delay(pool.shutdown)
   }
 
-  class ConsoleImpl[F[_] : Applicative](val pool: ThreadPool[F])(implicit sync: Sync[F], cs: ContextShift[F])
+  class ConsoleImpl[F[_]](val pool: ThreadPool[F])(implicit sync: Sync[F], cs: ContextShift[F])
   extends Console[F] {
     override def readLine: F[Fiber[F, String]]
       = pool.delay(StdIn.readLine)
 
     override def printLine(text: String): F[Unit]
-      = Applicative[F].pure(println(text))
+      = Sync[F].delay(println(text))
   }
 
-  class FileReaderImpl[F[_]](implicit sync: Sync[F], ap: Applicative[F]) extends FileReader[F] {
+  class FileReaderImpl[F[_]](implicit sync: Sync[F]) extends FileReader[F] {
     override def readFile(fileName: String): F[String] = {
       (for {
-        file <- Resource.fromAutoCloseable(Applicative[F].pure(Source.fromFile(fileName)))
+        file <- Resource.fromAutoCloseable(Sync[F].delay(Source.fromFile(fileName)))
       } yield file).use({ file =>
         for {
-          data <- Applicative[F].pure(file.getLines().toList.mkString(" "))
+          data <- Sync[F].delay(file.getLines().toList.mkString(" "))
         } yield data
       })
     }
@@ -172,10 +172,10 @@ object EffectsHomework2 {
       = Either.cond(data.nonEmpty, data, ValidationError.EmptyFile)
   }
 
-  class HashImpl[F[_]](pool: ThreadPool[F])(implicit sync: Sync[F], cs: ContextShift[F], ap: Applicative[F])
+  class HashImpl[F[_]](pool: ThreadPool[F])(implicit sync: Sync[F], cs: ContextShift[F])
   extends Hash[F, HashItem] {
     override def getMinHash(text: String, seed: Int): F[HashItem] = for {
-      words <- Applicative[F].pure(text.split("[\\s\\t\\n]+").toList)
+      words <- Sync[F].pure(text.split("[\\s\\t\\n]+").toList)
       hashes <- words.traverse(word => getWordHash(word, seed).map(HashItem(word, _)))
     } yield hashes.sortWith(_.hash < _.hash).head
 
