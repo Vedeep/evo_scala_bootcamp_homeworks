@@ -242,7 +242,6 @@ object EffectsHomework2 {
             case NonFatal(e)                 => console.printLine(s"Error: ${e.getMessage}")
           }
 
-          console.printLine("-".repeat(33))
           run
         })
     }
