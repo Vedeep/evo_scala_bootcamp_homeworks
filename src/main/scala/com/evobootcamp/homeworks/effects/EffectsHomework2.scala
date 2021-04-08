@@ -109,7 +109,7 @@ object EffectsHomework2 {
   }
 
   sealed class HashStorage[F[_]](implicit ap: Applicative[F]) extends Storage[F, HashItem] {
-    @volatile var store: AtomicReference[Map[String, HashItem]] = new AtomicReference(Map())
+    val store: AtomicReference[Map[String, HashItem]] = new AtomicReference(Map())
 
     override def set(key: String, item: HashItem): F[Unit] = {
       Applicative[F].pure(store.getAndUpdate(_ + (key -> item)))
