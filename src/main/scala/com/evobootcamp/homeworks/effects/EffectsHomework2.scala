@@ -1,8 +1,10 @@
 package com.evobootcamp.homeworks.effects
 
-import cats.effect.{Blocker, ContextShift, ExitCode, IO, IOApp, Resource, Sync}
+import cats.{Applicative, ApplicativeError, Apply, Monad, MonadError}
+import cats.effect.{Blocker, ContextShift, ExitCode, Fiber, IO, IOApp, Resource, Sync}
 import cats.implicits._
 
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.{ExecutorService, Executors}
 import scala.concurrent.{ExecutionContext, ExecutionContextExecutor}
 import scala.io.{Source, StdIn}
@@ -43,14 +45,16 @@ import scala.util.control.{NoStackTrace, NonFatal}
 object EffectsHomework2App extends IOApp {
   import EffectsHomework2._
 
-  private val pool = new PoolImpl
-  private val console = new ConsoleImpl(pool)
-  private val fileReader = new FileReaderImpl
+  private val pool = new PoolImpl[IO] {
+    override def start[A](fa: IO[A]): IO[Fiber[IO, A]] = fa.start
+  }
+  private val console = new ConsoleImpl[IO](pool)
+  private val fileReader = new FileReaderImpl[IO]
   private val validator = new ValidatorImpl
-  private val hash = new HashImpl(pool)
-  private val storage = new HashStorage
+  private val hash = new HashImpl[IO](pool)
+  private val storage = new HashStorage[IO]
 
-  private val app = new HashApp(
+  private val app: HashApp[IO] = new HashApp[IO](
     fileReader,
     console,
     validator,
@@ -58,12 +62,15 @@ object EffectsHomework2App extends IOApp {
     storage
   )
 
-  override def run(args: List[String]): IO[ExitCode]
-    = app.run() *> pool.shutdown() *> IO.pure(ExitCode.Success)
+  override def run(args: List[String]): IO[ExitCode] = for {
+    minHash <- app.run()
+    _ <- console.printLine(minHash.toString)
+    _ <- pool.shutdown()
+  } yield ExitCode.Success
 }
 
 object EffectsHomework2 {
-  type HashItem = (String, Int)
+  sealed case class HashItem(text: String, hash: Int)
 
   sealed trait ValidationError extends Throwable with NoStackTrace
   object ValidationError extends Throwable with NoStackTrace {
@@ -72,9 +79,9 @@ object EffectsHomework2 {
     case object EmptyFile extends ValidationError
   }
 
-  sealed trait Console {
-    def readLine: IO[String]
-    def printLine(text: String): IO[Unit]
+  sealed trait Console[F[_]] {
+    def readLine: F[Fiber[F, String]]
+    def printLine(text: String): F[Unit]
   }
 
   sealed trait Validator {
@@ -83,67 +90,69 @@ object EffectsHomework2 {
     def validateContent(data: String): Either[ValidationError, String]
   }
 
-  sealed trait FileReader {
-    def readFile(fileName: String): IO[String]
+  sealed trait FileReader[F[_]] {
+    def readFile(fileName: String): F[String]
   }
 
-  sealed trait Hash {
-    def getMinHash(text: String, seed: Int): IO[HashItem]
+  sealed trait Hash[F[_], A] {
+    def getMinHash(text: String, seed: Int): F[A]
   }
 
-  sealed trait ThreadPool {
-    def delay[A](thunk: => A)(implicit sync: Sync[IO], cs: ContextShift[IO]): IO[A]
-    def shutdown(): IO[Unit]
+  sealed trait ThreadPool[F[_]] {
+    def delay[A](thunk: => A)(implicit sync: Sync[F], cs: ContextShift[F]): F[Fiber[F, A]]
+    def shutdown(): F[Unit]
   }
 
-  sealed trait Storage[T] {
-    def add(key: String, item: T): IO[Unit]
-    def get(key: String): IO[Option[T]]
+  sealed trait Storage[F[_], T] {
+    def set(key: String, item: T): F[Unit]
+    def get(key: String): F[Option[T]]
   }
 
-  sealed class HashStorage extends Storage[HashItem] {
-    @volatile var store: Map[String, HashItem] = Map()
+  sealed class HashStorage[F[_]](implicit ap: Applicative[F]) extends Storage[F, HashItem] {
+    @volatile var store: AtomicReference[Map[String, HashItem]] = new AtomicReference(Map())
 
-    override def add(key: String, item: HashItem): IO[Unit] = {
-      IO.pure(synchronized {
-        store = store + (key -> item)
-      })
+    override def set(key: String, item: HashItem): F[Unit] = {
+      Applicative[F].pure(store.getAndUpdate(_ + (key -> item)))
     }
 
-    override def get(key: String): IO[Option[HashItem]] = {
-      IO.pure(synchronized {
-        store.get(key)
-      })
+    override def get(key: String): F[Option[HashItem]] = {
+      Applicative[F].pure(store.get().get(key))
     }
   }
 
-  class PoolImpl(private val poolSize: Int = 4) extends ThreadPool {
-    private val pool: ExecutorService = Executors.newFixedThreadPool(poolSize)
-    private val executionContext: ExecutionContextExecutor
+  abstract class PoolImpl[F[_]]
+  (private val poolSize: Int = 4)
+  (implicit ap: Applicative[F])
+  extends ThreadPool[F] {
+    private[effects] val pool: ExecutorService = Executors.newFixedThreadPool(poolSize)
+    private[effects] val executionContext: ExecutionContextExecutor
       = ExecutionContext.fromExecutor(pool)
-    private val blocker = Blocker.liftExecutionContext(executionContext)
+    private[effects] val blocker = Blocker.liftExecutionContext(executionContext)
 
-    override def delay[A](thunk: => A)(implicit sync: Sync[IO], cs: ContextShift[IO]): IO[A]
-      = blocker.delay(thunk)
+    def start[A](fa: F[A]): F[Fiber[F, A]]
 
-    override def shutdown(): IO[Unit] = IO(pool.shutdown)
+    override def delay[A](thunk: => A)(implicit sync: Sync[F], cs: ContextShift[F]): F[Fiber[F, A]]
+      = start(blocker.delay[F, A](thunk))
+
+    override def shutdown(): F[Unit] = Applicative[F].pure(pool.shutdown)
   }
 
-  class ConsoleImpl(val pool: ThreadPool)(implicit sync: Sync[IO], cs: ContextShift[IO]) extends Console {
-    override def readLine: IO[String]
+  class ConsoleImpl[F[_] : Applicative](val pool: ThreadPool[F])(implicit sync: Sync[F], cs: ContextShift[F])
+  extends Console[F] {
+    override def readLine: F[Fiber[F, String]]
       = pool.delay(StdIn.readLine)
 
-    override def printLine(text: String): IO[Unit]
-      = IO.pure(println(text))
+    override def printLine(text: String): F[Unit]
+      = Applicative[F].pure(println(text))
   }
 
-  class FileReaderImpl extends FileReader {
-    override def readFile(fileName: String): IO[String] = {
+  class FileReaderImpl[F[_]](implicit sync: Sync[F], ap: Applicative[F]) extends FileReader[F] {
+    override def readFile(fileName: String): F[String] = {
       (for {
-        file <- Resource.fromAutoCloseable(IO(Source.fromFile(fileName)))
+        file <- Resource.fromAutoCloseable(Applicative[F].pure(Source.fromFile(fileName)))
       } yield file).use({ file =>
         for {
-          data <- IO.pure(file.getLines().toList.mkString(" "))
+          data <- Applicative[F].pure(file.getLines().toList.mkString(" "))
         } yield data
       })
     }
@@ -163,16 +172,17 @@ object EffectsHomework2 {
       = Either.cond(data.nonEmpty, data, ValidationError.EmptyFile)
   }
 
-  class HashImpl(pool: ThreadPool)(implicit sync: Sync[IO], cs: ContextShift[IO]) extends Hash {
-    override def getMinHash(text: String, seed: Int): IO[HashItem] = for {
-      words <- IO.pure(text.split("[\\s\\t\\n]+").toList)
-      hashes <- words.traverse(word => getWordHash(word, seed).map((word, _)))
-    } yield hashes.sortWith(_._2 < _._2).head
+  class HashImpl[F[_]](pool: ThreadPool[F])(implicit sync: Sync[F], cs: ContextShift[F], ap: Applicative[F])
+  extends Hash[F, HashItem] {
+    override def getMinHash(text: String, seed: Int): F[HashItem] = for {
+      words <- Applicative[F].pure(text.split("[\\s\\t\\n]+").toList)
+      hashes <- words.traverse(word => getWordHash(word, seed).map(HashItem(word, _)))
+    } yield hashes.sortWith(_.hash < _.hash).head
 
-    def getWordHash(word: String, seed: Int): IO[Int] = {
+    def getWordHash(word: String, seed: Int): F[Int] = {
       for {
-        f1 <- pool.delay(javaHash(word)).start
-        f2 <- pool.delay(knuthHash(word, seed)).start
+        f1 <- pool.delay(javaHash(word))
+        f2 <- pool.delay(knuthHash(word, seed))
 
         h1 <- f1.join
         h2 <- f2.join
@@ -194,35 +204,35 @@ object EffectsHomework2 {
     }
   }
 
-  class HashApp(
-    val fileReader: FileReader,
-    val console: Console,
+  class HashApp[F[_]](
+    val fileReader: FileReader[F],
+    val console: Console[F],
     val validator: Validator,
-    val hash: Hash,
-    val storage: Storage[HashItem]
-  )(implicit sync: Sync[IO], cs: ContextShift[IO]) {
+    val hash: Hash[F, HashItem],
+    val storage: Storage[F, HashItem]
+  )(implicit sync: Sync[F], cs: ContextShift[F], met: MonadError[F, Throwable]) {
     private val storageKey: String = "min-hash"
-    private def storeMinHash(hash: HashItem): IO[Unit]
-      = storage.add(storageKey, hash)
+    private def storeMinHash(hash: HashItem): F[Unit]
+      = storage.set(storageKey, hash)
 
-    def run(): IO[ExitCode] = {
+    def run(): F[HashItem] = {
       (for {
         _ <- console.printLine("Enter file name:")
-        fiber1 <- console.readLine.start
+        fiber1 <- console.readLine
         dirtyName <- fiber1.join
-        fileName <- IO.fromEither(validator.validateFileName(dirtyName))
+        fileName <- MonadError[F, Throwable].fromEither(validator.validateFileName(dirtyName))
 
         _ <- console.printLine("Enter seed:")
-        fiber2 <- console.readLine.start
+        fiber2 <-  console.readLine
         dirtySeed <- fiber2.join
-        seed <- IO.fromEither(validator.validateSeed(dirtySeed))
+        seed <- MonadError[F, Throwable].fromEither(validator.validateSeed(dirtySeed))
 
         dirtyData <- fileReader.readFile(fileName)
-        data <- IO.fromEither(validator.validateContent(dirtyData))
+        data <- MonadError[F, Throwable].fromEither(validator.validateContent(dirtyData))
         minHash <- hash.getMinHash(data, seed)
 
         _ <- storeMinHash(minHash)
-      } yield ExitCode.Success)
+      } yield minHash)
         .handleErrorWith(e => {
           e match {
             case ValidationError.NotNumber
@@ -233,7 +243,7 @@ object EffectsHomework2 {
           }
 
           console.printLine("-".repeat(33))
-          run()
+          run
         })
     }
   }
