@@ -34,7 +34,7 @@ libraryDependencies += "org.scalatestplus" %% "scalatestplus-scalacheck" % scala
 libraryDependencies += "org.scalatestplus" %% "selenium-2-45" % scalaTestVersion % Test
 libraryDependencies += "org.typelevel" %% "cats-core" % catsVersion
 libraryDependencies += "org.typelevel" %% "cats-effect" % catsEffectVersion
-
+libraryDependencies += "com.codecommit" %% "cats-effect-testing-scalatest" % "0.4.1" % Test,
 // Here, `libraryDependencies` is a set of dependencies, and by using `+=`,
 // we're adding the scala-parser-combinators dependency to the set of dependencies
 // that sbt will go and fetch when it starts up.
