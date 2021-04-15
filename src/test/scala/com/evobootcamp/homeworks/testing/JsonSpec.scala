@@ -43,7 +43,6 @@ class JsonSpec extends AnyFlatSpec with ScalaCheckDrivenPropertyChecks with Matc
 
   "parse" should "invert print" in {
     forAll(jsonGen) { json =>
-      println("is print", print(json))
       parse(print(json)) shouldEqual Some(json)
     }
   }
