@@ -34,6 +34,7 @@ libraryDependencies += "org.scalatestplus" %% "scalatestplus-scalacheck" % scala
 libraryDependencies += "org.scalatestplus" %% "selenium-2-45" % scalaTestVersion % Test
 libraryDependencies += "org.typelevel" %% "cats-core" % catsVersion
 libraryDependencies += "org.typelevel" %% "cats-effect" % catsEffectVersion
+libraryDependencies += "org.tpolecat" %% "atto-core" % "0.8.0"
 
 // Here, `libraryDependencies` is a set of dependencies, and by using `+=`,
 // we're adding the scala-parser-combinators dependency to the set of dependencies
