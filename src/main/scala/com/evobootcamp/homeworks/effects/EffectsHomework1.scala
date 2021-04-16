@@ -34,7 +34,7 @@ object EffectsHomework1 extends App {
     def map[B](f: A => B): IO[B] = IO(f(body))
     def flatMap[B](f: A => IO[B]): IO[B] = IO(map(f).run().run())
     def *>[B](another: IO[B]): IO[B] = flatMap(_ => another)
-    def as[B](newValue: => B): IO[B] = IO(newValue)
+    def as[B](newValue: => B): IO[B] = map(_ => newValue)
     def void: IO[Unit] = map(_ => ())
     def attempt: IO[Either[Throwable, A]] = redeem(Left.apply, Right.apply)
     def option: IO[Option[A]] = redeem(_ => None, Option.apply)
