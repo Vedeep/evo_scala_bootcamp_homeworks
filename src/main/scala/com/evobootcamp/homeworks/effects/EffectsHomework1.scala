@@ -43,7 +43,7 @@ object EffectsHomework1 extends App {
     def redeem[B](recover: Throwable => B, map: A => B): IO[B]
       = redeemWith(e => IO(recover(e)), v => IO(map(v)))
     def redeemWith[B](recover: Throwable => IO[B], bind: A => IO[B]): IO[B]
-      = Try(run()).fold(recover, bind)
+      = IO.unit.flatMap(_ => Try(run()).fold(recover, bind))
     def unsafeRunSync(): A = body
     def unsafeToFuture(): Future[A] = Future.fromTry(Try(unsafeRunSync))
   }
