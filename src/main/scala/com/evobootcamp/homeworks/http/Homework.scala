@@ -106,7 +106,7 @@ object Games {
   trait GameActionResponse extends Product with Serializable {}
 
   trait GameRoutes {
-    def routesOf[F[+_] : Applicative](root: Path): List[Route[F, GameActionResponse, GameError]]
+    def routesOf[F[+_]](root: Path): List[Route[F, GameActionResponse, GameError]]
   }
 
   final case class TheGuessStartParams(min: Long, max: Long) {}
@@ -135,7 +135,7 @@ object Games {
   }
 
   object TheGuess {
-    def routesOf[F[+_] : Applicative](root: RouteRoot)(implicit mt: MonadThrow[F], s: Sync[F]): List[GameRoute[F, GameActionResponse, GameError]] = {
+    def routesOf[F[+_]](root: RouteRoot)(implicit mt: MonadThrow[F], s: Sync[F]): List[GameRoute[F, GameActionResponse, GameError]] = {
       GameRoute[F, GameActionResponse, GameError](
         {
           case POST -> root.path / "start" => Some(new TheGuessController.Start[F])
