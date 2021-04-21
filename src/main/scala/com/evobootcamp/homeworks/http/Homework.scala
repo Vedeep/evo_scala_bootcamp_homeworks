@@ -1,9 +1,14 @@
 package com.evobootcamp.homeworks.http
 
-import io.circe.Json
+import io.circe.{Decoder, HCursor, Json}
 import cats.effect.{Blocker, ExitCode, IO, IOApp, Sync}
 import cats.data.EitherT
 import cats.syntax.all._
+import fs2.Pipe
+import fs2.concurrent.Queue
+import io.circe.Decoder.Result
+import io.circe.generic.JsonCodec
+import io.circe.generic.semiauto.deriveDecoder
 
 import scala.annotation.tailrec
 import org.http4s._
@@ -13,6 +18,8 @@ import org.http4s.client.dsl.io._
 import org.http4s.dsl.io._
 import org.http4s.implicits._
 import org.http4s.server.blaze.BlazeServerBuilder
+import org.http4s.server.websocket.WebSocketBuilder
+import org.http4s.websocket.WebSocketFrame
 
 import scala.concurrent.ExecutionContext
 
@@ -82,6 +89,28 @@ object Router {
   }
 
   sealed case class GameRouteRoot(path: Path) extends RouteRoot
+}
+
+object WebSocketRouter {
+  import Router._
+
+  final case class IncomingMessage(command: String)
+
+  trait WsRouter[F[+_], +A, +E] {
+    def find(command: String): Option[RouteAction[F, A, E]]
+  }
+
+  trait WsRouteAction[F[+_], +A, +E] {
+    def execute(msg: String): F[Either[E, A]]
+  }
+
+//  implicit val incMessageDecoder: Decoder[IncomingMessage] = deriveDecoder[IncomingMessage]
+
+
+//
+//  case class TestParams(min: Long, max: Long)
+//
+//  case class Test(command: String = "get-token", params: TestParams) extends IncomingMessage[TestParams]
 }
 
 object Games {
@@ -234,7 +263,44 @@ object GuessServer extends IOApp {
     }
   }
 
-  private val httpApp = gamesRoutes.orNotFound
+  import WebSocketRouter._
+
+  private val wsRoutes = {
+    import io.circe.generic.auto._
+    import org.http4s.circe.CirceEntityCodec._
+    import io.circe.syntax._
+
+//    val router =
+
+    HttpRoutes.of[IO] {
+      case GET -> Root / "ws" / "v1" / "games" => {
+        val pipe: Pipe[IO, WebSocketFrame, WebSocketFrame] = _.collect {
+          case WebSocketFrame.Text(message, _) => {
+            (for {
+              msg <- io.circe.jawn.decode[IncomingMessage](message)
+              _ <- Right()
+            } yield msg) match {
+              case Right(msg) => WebSocketFrame.Text("Vse zbs")
+              case Left(e) => WebSocketFrame.Text(e.toString)
+            }
+
+
+//            WebSocketFrame.Text(message)
+          }
+        }
+
+        for {
+          queue <- Queue.unbounded[IO, WebSocketFrame]
+          response <- WebSocketBuilder[IO].build(
+            receive = queue.enqueue,
+            send = queue.dequeue.through(pipe),
+          )
+        } yield response
+      }
+    }
+  }
+
+  private val httpApp = (gamesRoutes <+> wsRoutes).orNotFound
 
   override def run(args: List[String]): IO[ExitCode] =
     BlazeServerBuilder[IO](ExecutionContext.global)
