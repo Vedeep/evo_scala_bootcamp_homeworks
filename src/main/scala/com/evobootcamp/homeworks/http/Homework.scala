@@ -83,16 +83,6 @@ object Router {
     def ofRoutes[F[+_], A, E](routes: List[Route[F, A, E]]): Router[F, A, E] = new GameRouter[F, A, E](routes)
   }
 
-  trait RouteResponse {
-
-  }
-
-  case class GameRouteResponse(resp: String = "") extends RouteResponse
-
-  object GameRouteResponse {
-    def apply(value: String): GameRouteResponse = new GameRouteResponse(value)
-  }
-
   sealed case class GameRouteRoot(path: Path) extends RouteRoot
 }
 
@@ -113,26 +103,20 @@ object Games {
 
   trait Game {}
 
-  trait GameActionResponse[F[_]] {}
-
-  implicit val responseEncoder: EntityEncoder[IO, GameActionResponse[IO]] = new EntityEncoder[IO, GameActionResponse[IO]] {
-    override def toEntity(a: GameActionResponse[IO]): Entity[IO] = Entity.empty
-
-    override def headers: Headers = Headers.empty
-  }
+  trait GameActionResponse extends Product with Serializable {}
 
   trait GameRoutes {
-    def routesOf[F[+_] : Applicative](root: Path): List[Route[F, GameActionResponse[F], GameError]]
+    def routesOf[F[+_] : Applicative](root: Path): List[Route[F, GameActionResponse, GameError]]
   }
 
   final case class TheGuessStartParams(min: Long, max: Long) {}
-  final case class TheGuessStartResult[F[_]](min: Long, max: Long, result: Long) extends GameActionResponse[F] {}
+  final case class TheGuessStartResult(min: Long, max: Long, result: Long) extends GameActionResponse {}
 
   final case class TheGuessPickParams(num: Long) {}
-  final case class TheGuessPickResult[F[_]](result: Long) extends GameActionResponse[F] {}
+  final case class TheGuessPickResult(result: Long) extends GameActionResponse {}
 
   final class TheGuess private extends Game {
-    def start[F[_] : Applicative](params: TheGuessStartParams): Either[GameError, TheGuessStartResult[F]] = {
+    def start(params: TheGuessStartParams): Either[GameError, TheGuessStartResult] = {
       params match {
         case TheGuessStartParams(min, max) if min > max => Left(GameErrors.NumberMinMoreMaxError)
         case TheGuessStartParams(min, max) if min == max => Left(GameErrors.NumberMinEqualsMaxError)
@@ -141,23 +125,23 @@ object Games {
       }
     }
 
-    def pick[F[_]: Applicative](params: TheGuessPickParams, result: Long): Either[GameError, TheGuessPickResult[F]] = {
+    def pick(params: TheGuessPickParams, result: Long): Either[GameError, TheGuessPickResult] = {
       if (params.num > result) Left(GameErrors.ValueMoreThanResult)
       else if (params.num < result) Left(GameErrors.ValueLessThanResult)
-      else Right(TheGuessPickResult[F](result))
+      else Right(TheGuessPickResult(result))
     }
 
     def getRandomNumber(min: Long, max: Long): Long = scala.util.Random.between(min, max)
   }
 
   object TheGuess {
-    def routesOf[F[+_] : Applicative](root: RouteRoot)(implicit mt: MonadThrow[F], s: Sync[F]): List[GameRoute[F, GameActionResponse[F], GameError]] = {
-      GameRoute[F, GameActionResponse[F], GameError](
+    def routesOf[F[+_] : Applicative](root: RouteRoot)(implicit mt: MonadThrow[F], s: Sync[F]): List[GameRoute[F, GameActionResponse, GameError]] = {
+      GameRoute[F, GameActionResponse, GameError](
         {
           case POST -> root.path / "start" => Some(new TheGuessController.Start[F])
         },
       ) ::
-      GameRoute[F, GameActionResponse[F], GameError](
+      GameRoute[F, GameActionResponse, GameError](
         {
           case POST -> root.path / "pick"  => Some(new TheGuessController.Pick[F])
         },
@@ -171,16 +155,16 @@ object Games {
       import io.circe.generic.auto._
       import org.http4s.circe.CirceEntityCodec._
 
-      class Start[F[+_]](implicit mt: MonadThrow[F], s: Sync[F]) extends RouteAction[F, TheGuessStartResult[F], GameError] {
-        override def execute: RouteExecute[F, TheGuessStartResult[F], GameError] = (req: Request[F]) => {
+      class Start[F[+_]](implicit mt: MonadThrow[F], s: Sync[F]) extends RouteAction[F, TheGuessStartResult, GameError] {
+        override def execute: RouteExecute[F, TheGuessStartResult, GameError] = (req: Request[F]) => {
           req.as[TheGuessStartParams].flatMap { params =>
-            Sync[F].delay(apply.start[F](params))
+            Sync[F].delay(apply.start(params))
           }
         }
       }
 
-      class Pick[F[+_]](implicit mt: MonadThrow[F], s: Sync[F]) extends RouteAction[F, TheGuessPickResult[F], GameError] {
-        override def execute: RouteExecute[F, TheGuessPickResult[F], GameError] = (req: Request[F]) => {
+      class Pick[F[+_]](implicit mt: MonadThrow[F], s: Sync[F]) extends RouteAction[F, TheGuessPickResult, GameError] {
+        override def execute: RouteExecute[F, TheGuessPickResult, GameError] = (req: Request[F]) => {
           req.as[TheGuessPickParams].flatMap { params =>
             Sync[F].pure(params).map { params =>
               req.cookies
@@ -188,7 +172,7 @@ object Games {
                 .flatMap(_.content.toLongOption)
                 .toRight(GameErrors.GameNotStarted)
                 .flatMap { gameResult =>
-                  apply.pick[F](params, gameResult)
+                  apply.pick(params, gameResult)
                 }
             }
           }
@@ -229,7 +213,7 @@ object GuessServer extends IOApp {
       case _ => InternalServerError(errorFromString("Unsupported error type"))
     }
 
-    def formatGameResult(r: GameActionResponse[IO]): IO[Response[IO]] = r match {
+    def formatGameResult(r: GameActionResponse): IO[Response[IO]] = r match {
       case TheGuessStartResult(min, max, result) => Ok(
         Json.obj(
           "result" -> Json.fromString("OK"),
@@ -245,7 +229,7 @@ object GuessServer extends IOApp {
   }
 
   private val gamesRoutes = {
-    val router = GameRouter.ofRoutes[IO, GameActionResponse[IO], GameError](
+    val router = GameRouter.ofRoutes[IO, GameActionResponse, GameError](
       TheGuess.routesOf[IO](GuessRoot)
     )
 
