@@ -1,27 +1,29 @@
 package com.evobootcamp.homeworks.http
 
-import io.circe.{Decoder, HCursor, Json}
-import cats.effect.{Blocker, ExitCode, IO, IOApp, Sync}
+import io.circe.{Json}
+import cats.effect.concurrent.Ref
+import cats.effect.{Blocker, ExitCode, IO, IOApp, Resource, Sync}
+import cats._
 import cats.data.EitherT
 import cats.syntax.all._
 import fs2.Pipe
 import fs2.concurrent.Queue
-import io.circe.Decoder.Result
-import io.circe.generic.JsonCodec
-import io.circe.generic.semiauto.deriveDecoder
 
 import scala.annotation.tailrec
 import org.http4s._
 import org.http4s.client.Client
 import org.http4s.client.blaze.BlazeClientBuilder
 import org.http4s.client.dsl.io._
+import org.http4s.client.jdkhttpclient.{JdkWSClient, WSConnectionHighLevel, WSFrame, WSRequest}
 import org.http4s.dsl.io._
 import org.http4s.implicits._
 import org.http4s.server.blaze.BlazeServerBuilder
 import org.http4s.server.websocket.WebSocketBuilder
 import org.http4s.websocket.WebSocketFrame
 
+import java.net.http.HttpClient
 import scala.concurrent.ExecutionContext
+import scala.util.control.NonFatal
 
 // Homework. Place the solution under `http` package in your homework repository.
 //
@@ -92,29 +94,94 @@ object Router {
 }
 
 object WebSocketRouter {
-  import Router._
+  type WsRouteFind[F[+_], +A, +E] = String => Option[WsRouteAction[F, A, E]]
+  type WsRouteExecute[F[+_], +A, +E] = (String) => (WsSession[F]) => F[Either[E, A]]
 
   final case class IncomingMessage(command: String)
 
+  trait IncomingMessageWithParams[A] {
+    def command: String
+    def params: A
+  }
+
   trait WsRouter[F[+_], +A, +E] {
-    def find(command: String): Option[RouteAction[F, A, E]]
+    def find(command: String): Option[WsRouteAction[F, A, E]]
+  }
+
+  trait WsRoute[F[+_], +A, +E] {
+    def check: WsRouteFind[F, A, E]
   }
 
   trait WsRouteAction[F[+_], +A, +E] {
-    def execute(msg: String): F[Either[E, A]]
+    def execute: WsRouteExecute[F, A, E]
   }
 
-//  implicit val incMessageDecoder: Decoder[IncomingMessage] = deriveDecoder[IncomingMessage]
+  trait WsSession[F[_]] {
+    def get[A](key: String): F[Option[A]]
+    def set[A](key: String, value: A): F[Unit]
+    def del(key: String): F[Unit]
+  }
 
+  final class WsGameRouter[F[+_], +A, +E] private (val routes: List[WsRoute[F, A, E]]) extends WsRouter[F, A, E] {
+    override def find(command: String): Option[WsRouteAction[F, A, E]] = {
+      @tailrec
+      def recursive(routes: List[WsRoute[F, A, E]]): Option[WsRouteAction[F, A, E]] = {
+        routes match {
+          case route :: tail => {
+            route.check(command) match {
+              case act @ Some(_) => act
+              case _ => recursive(tail)
+            }
+          }
+          case _ => None
+        }
+      }
 
-//
-//  case class TestParams(min: Long, max: Long)
-//
-//  case class Test(command: String = "get-token", params: TestParams) extends IncomingMessage[TestParams]
+      recursive(routes)
+    }
+  }
+
+  final class WsGameRoute[F[+_], +A, +E](checkF: WsRouteFind[F, A, E]) extends WsRoute[F, A, E] {
+    override def check = checkF
+  }
+
+  object WsGameRoute {
+    def apply[F[+_], A, E](checkF: WsRouteFind[F, A, E]): WsGameRoute[F, A, E]
+    = new WsGameRoute(checkF)
+  }
+
+  object WsGameRouter {
+    def ofRoutes[F[+_], A, E](routes: List[WsRoute[F, A, E]]): WsRouter[F, A, E] = new WsGameRouter[F, A, E](routes)
+  }
+
+  sealed class GamesWsSession[F[_]](implicit sync: Sync[F]) extends WsSession[F] {
+    private lazy val sessionMap: Ref[F, Map[String, Any]] = Ref.unsafe(Map.empty)
+    private val session: F[Ref[F, Map[String, Any]]] = Sync[F].delay(sessionMap)
+
+    override def set[A](key: String, value: A): F[Unit] = for {
+      ref <- session
+      _ <- ref.getAndUpdate(_ + (key -> value))
+    } yield ()
+
+    override def get[A](key: String): F[Option[A]] = for {
+      ref <- session
+      mp <- ref.get
+    } yield mp.get(key).asInstanceOf[Option[A]]
+
+    override def del(key: String): F[Unit] = for {
+      ref <- session
+      _ <- ref.getAndUpdate(_ - key)
+    } yield ()
+  }
+
+  object GamesWsSession {
+    def of[F[_]](implicit SF: Sync[F]): F[WsSession[F]] = Sync[F].pure(new GamesWsSession[F])
+  }
 }
 
 object Games {
   import Router._
+  import WebSocketRouter._
 
   trait GameError extends Error
   object GameErrors {
@@ -126,6 +193,8 @@ object Games {
     case object ValueLessThanResult extends GameError
     case object ValueMoreThanResult extends GameError
     case object GameNotStarted extends GameError
+    case object InternalError extends GameError
+    case object GameNotFound extends GameError
   }
 
   trait Game {}
@@ -138,9 +207,13 @@ object Games {
 
   final case class TheGuessStartParams(min: Long, max: Long) {}
   final case class TheGuessStartResult(min: Long, max: Long, result: Long) extends GameActionResponse {}
+  final case class TheGuessStartParamsWs(command: String, params: TheGuessStartParams)
+    extends IncomingMessageWithParams[TheGuessStartParams]
 
   final case class TheGuessPickParams(num: Long) {}
   final case class TheGuessPickResult(result: Long) extends GameActionResponse {}
+  final case class TheGuessPickParamsWs(command: String, params: TheGuessPickParams)
+    extends IncomingMessageWithParams[TheGuessPickParams]
 
   final class TheGuess private extends Game {
     def start[F[_]](params: TheGuessStartParams)(implicit sf: Sync[F]): F[Either[GameError, TheGuessStartResult]] = {
@@ -181,6 +254,15 @@ object Games {
       ) :: Nil
     }
 
+    def wsRoutesOf[F[+_]](implicit mt: MonadThrow[F], s: Sync[F]): List[WsRoute[F, GameActionResponse, GameError]] = {
+      WsGameRoute[F, GameActionResponse, GameError]({ command =>
+        Option.when(command == "guess/start")(new TheGuessWsController.Start[F])
+      }) ::
+      WsGameRoute[F, GameActionResponse, GameError]({ command =>
+        Option.when(command == "guess/pick")(new TheGuessWsController.Pick[F])
+      }) :: Nil
+    }
+
     def apply: TheGuess = new TheGuess
 
     private def start[F[+_]](implicit s: Sync[F]): RouteAction[F, TheGuessStartResult, GameError] = (req: Request[F]) => {
@@ -198,6 +280,48 @@ object Games {
           )
           result <- EitherT(apply.pick(params, rightAnswer))
         } yield result).value
+      }
+    }
+
+    object TheGuessWsController {
+      import io.circe.generic.auto._
+
+      private val RESULT_KEY = "guess-result"
+
+      class Start[F[+_]](implicit mt: MonadThrow[F], s: Sync[F]) extends WsRouteAction[F, TheGuessStartResult, GameError] {
+        override def execute: WsRouteExecute[F, TheGuessStartResult, GameError]
+        = (msg: String) => (session: WsSession[F]) => {
+          val result: F[Either[GameError, TheGuessStartResult]] = for {
+            params <- Sync[F].fromEither(io.circe.jawn.decode[TheGuessStartParamsWs](msg)
+              .leftMap[GameError](_ => GameErrors.WrongParams))
+            result <- Sync[F].fromEither(apply.start(params.params))
+            _ <- session.set[Long](RESULT_KEY, result.result)
+          } yield Right(result)
+
+          Sync[F].handleError(result) {
+            case e: GameError => Left(e)
+            case _ => Left(GameErrors.InternalError)
+          }
+        }
+      }
+
+      class Pick[F[+_]](implicit mt: MonadThrow[F], s: Sync[F]) extends WsRouteAction[F, TheGuessPickResult, GameError] {
+        override def execute: WsRouteExecute[F, TheGuessPickResult, GameError]
+        = (msg: String) => (session: WsSession[F]) => {
+          val result: F[Either[GameError, TheGuessPickResult]] = for {
+            sessionValue <- session.get[Long](RESULT_KEY)
+            gameResult   <- Sync[F].fromOption(sessionValue, GameErrors.GameNotStarted)
+            params <- Sync[F].fromEither(io.circe.jawn.decode[TheGuessPickParamsWs](msg)
+              .leftMap(_ => GameErrors.WrongParams))
+            result <- Sync[F].fromEither(apply.pick(params.params, gameResult))
+            _ <- session.del(RESULT_KEY)
+          } yield Right(result)
+
+          Sync[F].handleError(result) {
+            case e: GameError => Left(e)
+            case _ => Left(GameErrors.InternalError)
+          }
+        }
       }
     }
   }
@@ -221,29 +345,39 @@ object GuessServer extends IOApp {
       )
     }
 
-    def formatGameError(e: GameError): IO[Response[IO]] = e match {
-      case GameErrors.WrongParams => BadRequest(errorFromString("Wrong incoming params"))
-      case GameErrors.NumberMinEqualsMaxError => BadRequest(errorFromString("Min value can't be equals max value"))
-      case GameErrors.NumberMinMoreMaxError => BadRequest(errorFromString("Min value can't be more then max value"))
-      case GameErrors.TokenNotFound => BadRequest(errorFromString("Please provide access token"))
-      case GameErrors.InvalidToken => BadRequest(errorFromString("Token is invalid"))
-      case GameErrors.ValueLessThanResult => BadRequest(errorFromString("Value less than result"))
-      case GameErrors.ValueMoreThanResult => BadRequest(errorFromString("Value more than result"))
-      case GameErrors.GameNotStarted => BadRequest(errorFromString("Game not started"))
-      case _ => InternalServerError(errorFromString("Unsupported error type"))
+    def getErrorMessage(e: GameError): Json = e match {
+      case GameErrors.WrongParams => errorFromString("Wrong incoming params")
+      case GameErrors.NumberMinEqualsMaxError => errorFromString("Min value can't be equals max value")
+      case GameErrors.NumberMinMoreMaxError => errorFromString("Min value can't be more then max value")
+      case GameErrors.TokenNotFound => errorFromString("Please provide access token")
+      case GameErrors.InvalidToken => errorFromString("Token is invalid")
+      case GameErrors.ValueLessThanResult => errorFromString("Value less than result")
+      case GameErrors.ValueMoreThanResult => errorFromString("Value more than result")
+      case GameErrors.GameNotStarted => errorFromString("Game not started")
+      case GameErrors.InternalError => errorFromString("Internal error")
+      case GameErrors.GameNotFound => errorFromString("Game not found")
+      case _ => errorFromString("Unsupported error type")
     }
 
-    def formatGameResult(r: GameActionResponse): IO[Response[IO]] = r match {
-      case TheGuessStartResult(min, max, result) => Ok(
-        Json.obj(
-          "result" -> Json.fromString("OK"),
-          "message" -> Json.fromString(s"Game started with params $min - $max")
-        )
-      ).map(_.addCookie("guess-result", result.toString))
-      case TheGuessPickResult(res) => Ok(Json.obj(
+    def getResultMessage(r: GameActionResponse): Json = r match {
+      case TheGuessStartResult(min, max, result) => Json.obj(
+        "result" -> Json.fromString("OK"),
+        "message" -> Json.fromString(s"Game started with params $min - $max")
+      )
+      case TheGuessPickResult(res) => Json.obj(
         "result" -> Json.fromString("OK"),
         "message" -> Json.fromString(s"Game is ended, result = $res.")
-      )).map(_.removeCookie("guess-result"))
+      )
+      case _ => Json.Null
+    }
+
+    def formatGameError(e: GameError): IO[Response[IO]] = BadRequest(getErrorMessage(e))
+
+    def formatGameResult(r: GameActionResponse): IO[Response[IO]] = r match {
+      case TheGuessStartResult(_, _, result)
+        => Ok(getResultMessage(r)).map(_.addCookie("guess-result", result.toString))
+      case TheGuessPickResult(_)
+        => Ok(getResultMessage(r)).map(_.removeCookie("guess-result"))
       case _ => Ok(Json.Null)
     }
   }
@@ -267,25 +401,36 @@ object GuessServer extends IOApp {
 
   private val wsRoutes = {
     import io.circe.generic.auto._
-    import org.http4s.circe.CirceEntityCodec._
-    import io.circe.syntax._
 
-//    val router =
+    val router = WsGameRouter.ofRoutes[IO, GameActionResponse, GameError](
+      TheGuess.wsRoutesOf[IO]
+    )
 
     HttpRoutes.of[IO] {
       case GET -> Root / "ws" / "v1" / "games" => {
+        val userSession = GamesWsSession.of[IO]
+
         val pipe: Pipe[IO, WebSocketFrame, WebSocketFrame] = _.collect {
           case WebSocketFrame.Text(message, _) => {
-            (for {
-              msg <- io.circe.jawn.decode[IncomingMessage](message)
-              _ <- Right()
-            } yield msg) match {
-              case Right(msg) => WebSocketFrame.Text("Vse zbs")
-              case Left(e) => WebSocketFrame.Text(e.toString)
+            val result = for {
+              msg <- IO.fromEither(io.circe.jawn.decode[IncomingMessage](message)
+                .leftMap(_ => GameErrors.WrongParams))
+              route <- IO.fromOption(router.find(msg.command))(GameErrors.GameNotFound)
+              session <- userSession
+              result <- route.execute(message)(session)
+            } yield result
+
+            val res = result.handleError {
+              case e: GameError => Left(e)
+              case NonFatal(_) => Left(GameErrors.InternalError)
+            }.unsafeRunSync()
+
+            res match {
+              case Left(e) => {
+                WebSocketFrame.Text(Formatter.getErrorMessage(e).noSpaces)
+              }
+              case Right(r) => WebSocketFrame.Text(Formatter.getResultMessage(r).noSpaces)
             }
-
-
-//            WebSocketFrame.Text(message)
           }
         }
 
@@ -363,5 +508,62 @@ object GuessClient extends IOApp {
           _ <- IO.pure(println(pickResponse.message))
       } yield ()
     }.as(ExitCode.Success)
+  }
+}
+
+object GuessClientWS extends IOApp {
+  private val uri = uri"ws://localhost:9876/ws/v1/games"
+  private val min = 0
+  private val max = 100
+
+  case class GuessRequest[A](command: String, params: A)
+  case class GuessStartRequest(min: Long, max: Long)
+  case class GuessPickRequest(num: Long)
+  case class GuessResponse(result: String, message: String)
+
+  import io.circe.generic.auto._
+  import io.circe.syntax._
+
+  private def pick(client: WSConnectionHighLevel[IO], num: Long): IO[GuessResponse] = {
+    def recursive(num: Long): IO[GuessResponse] = {
+      val result = for {
+        _ <- client.send(WSFrame.Text(GuessRequest("guess/pick", GuessPickRequest(num)).asJson.noSpaces))
+        msg <- client.receiveStream.collectFirst {
+          case WSFrame.Text(s, _) => s
+        }.compile.string
+        resp <- IO.fromEither(io.circe.jawn.decode[GuessResponse](msg))
+      } yield resp
+
+      result.flatMap { resp =>
+        if (resp.result == "OK") IO.pure(resp) else recursive(num + 1)
+      }
+    }
+
+    recursive(num)
+  }
+
+  private def start(client: WSConnectionHighLevel[IO], min: Long, max: Long): IO[GuessResponse] = {
+    for {
+      _ <- client.send(WSFrame.Text(GuessRequest("guess/start", GuessStartRequest(min, max)).asJson.noSpaces))
+      msg <- client.receiveStream.collectFirst {
+        case WSFrame.Text(s, _) => s
+      }.compile.string
+      resp <- IO.fromEither(io.circe.jawn.decode[GuessResponse](msg))
+    } yield resp
+  }
+
+  override def run(args: List[String]): IO[ExitCode] = {
+    val clientResource = Resource.eval(IO(HttpClient.newHttpClient()))
+      .flatMap(JdkWSClient[IO](_).connectHighLevel(WSRequest(uri)))
+
+    clientResource.use { client =>
+      for {
+        startResponse <- start(client, min, max)
+        _ <- IO.raiseWhen(startResponse.result != "OK")(new Error(startResponse.message))
+        _ <- IO.pure(println(startResponse.message))
+        pickResponse <- pick(client, min)
+        _ <- IO.pure(println(pickResponse.message))
+      } yield ExitCode.Success
+    }
   }
 }
