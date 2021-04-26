@@ -291,36 +291,24 @@ object Games {
       class Start[F[+_]](implicit mt: MonadThrow[F], s: Sync[F]) extends WsRouteAction[F, TheGuessStartResult, GameError] {
         override def execute: WsRouteExecute[F, TheGuessStartResult, GameError]
         = (msg: String) => (session: WsSession[F]) => {
-          val result: F[Either[GameError, TheGuessStartResult]] = for {
-            params <- Sync[F].fromEither(io.circe.jawn.decode[TheGuessStartParamsWs](msg)
+          (for {
+            parsed <- EitherT.fromEither[F](io.circe.jawn.decode[TheGuessStartParamsWs](msg)
               .leftMap[GameError](_ => GameErrors.WrongParams))
-            result <- Sync[F].fromEither(apply.start(params.params))
-            _ <- session.set[Long](RESULT_KEY, result.result)
-          } yield Right(result)
-
-          Sync[F].handleError(result) {
-            case e: GameError => Left(e)
-            case _ => Left(GameErrors.InternalError)
-          }
+            result <- EitherT(apply.start(parsed.params))
+            _ <- EitherT.right[GameError](session.set[Long](RESULT_KEY, result.result))
+          } yield result).value
         }
       }
 
       class Pick[F[+_]](implicit mt: MonadThrow[F], s: Sync[F]) extends WsRouteAction[F, TheGuessPickResult, GameError] {
         override def execute: WsRouteExecute[F, TheGuessPickResult, GameError]
         = (msg: String) => (session: WsSession[F]) => {
-          val result: F[Either[GameError, TheGuessPickResult]] = for {
-            sessionValue <- session.get[Long](RESULT_KEY)
-            gameResult   <- Sync[F].fromOption(sessionValue, GameErrors.GameNotStarted)
-            params <- Sync[F].fromEither(io.circe.jawn.decode[TheGuessPickParamsWs](msg)
-              .leftMap(_ => GameErrors.WrongParams))
-            result <- Sync[F].fromEither(apply.pick(params.params, gameResult))
-            _ <- session.del(RESULT_KEY)
-          } yield Right(result)
-
-          Sync[F].handleError(result) {
-            case e: GameError => Left(e)
-            case _ => Left(GameErrors.InternalError)
-          }
+          (for {
+            rightAnswer <- EitherT.fromOptionF(session.get[Long](RESULT_KEY), GameErrors.GameNotStarted)
+            parsed      <- EitherT.fromEither[F](io.circe.jawn.decode[TheGuessPickParamsWs](msg)
+              .leftMap[GameError](_ => GameErrors.WrongParams))
+            result      <- EitherT(apply.pick(parsed.params, rightAnswer))
+          } yield result).value
         }
       }
     }
@@ -412,23 +400,17 @@ object GuessServer extends IOApp {
 
         val pipe: Pipe[IO, WebSocketFrame, WebSocketFrame] = _.collect {
           case WebSocketFrame.Text(message, _) => {
-            val result = for {
-              msg <- IO.fromEither(io.circe.jawn.decode[IncomingMessage](message)
+            (for {
+              incomingMessage <- EitherT.fromEither[IO](io.circe.jawn.decode[IncomingMessage](message)
                 .leftMap(_ => GameErrors.WrongParams))
-              route <- IO.fromOption(router.find(msg.command))(GameErrors.GameNotFound)
-              session <- userSession
-              result <- route.execute(message)(session)
-            } yield result
-
-            val res = result.handleError {
-              case e: GameError => Left(e)
-              case NonFatal(_) => Left(GameErrors.InternalError)
-            }.unsafeRunSync()
-
-            res match {
-              case Left(e) => {
-                WebSocketFrame.Text(Formatter.getErrorMessage(e).noSpaces)
-              }
+              route <- EitherT.fromOption[IO](
+                router.find(incomingMessage.command),
+                GameErrors.GameNotFound.asInstanceOf[GameError]
+              )
+              session <- EitherT.right(userSession)
+              result <- EitherT(route.execute(message)(session))
+            } yield result).value.unsafeRunSync() match {
+              case Left(e) => WebSocketFrame.Text(Formatter.getErrorMessage(e).noSpaces)
               case Right(r) => WebSocketFrame.Text(Formatter.getResultMessage(r).noSpaces)
             }
           }
