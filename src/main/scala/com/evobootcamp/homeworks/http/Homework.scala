@@ -36,11 +36,7 @@ import scala.util.Try
 
 object Router {
   type RouteFind[F[+_], +A, +E] = Request[F] => Option[RouteAction[F, A, E]]
-  type RouteExecute[F[+_], +A, +E] = Request[F] => F[Either[E, A]]
-
-  trait RouteAction[F[+_], +A, +E] {
-    def execute: RouteExecute[F, A, E]
-  }
+  type RouteAction[F[+_], +A, +E] = Request[F] => F[Either[E, A]]
 
   trait Route[F[+_], +A, +E] {
     def check: RouteFind[F, A, E]
@@ -137,52 +133,44 @@ object Games {
       )
     }
 
-    def getRandomNumber(min: Long, max: Long): Long = scala.util.Random.between(min, max)
+    private def getRandomNumber(min: Long, max: Long): Long = scala.util.Random.between(min, max)
   }
 
   object TheGuess {
+    import io.circe.generic.auto._
+    import org.http4s.circe.CirceEntityCodec._
+
     def routesOf[F[+_]](root: RouteRoot)(implicit mt: MonadThrow[F], s: Sync[F]): List[GameRoute[F, GameActionResponse, GameError]] = {
       GameRoute[F, GameActionResponse, GameError](
         {
-          case POST -> root.path / "start" => Some(new TheGuessController.Start[F])
+          case POST -> root.path / "start" => Some(start)
         },
       ) ::
       GameRoute[F, GameActionResponse, GameError](
         {
-          case POST -> root.path / "pick"  => Some(new TheGuessController.Pick[F])
+          case POST -> root.path / "pick"  => Some(pick)
         },
       ) :: Nil
     }
 
     def apply: TheGuess = new TheGuess
 
-    object TheGuessController {
-
-      import io.circe.generic.auto._
-      import org.http4s.circe.CirceEntityCodec._
-
-      class Start[F[+_]](implicit mt: MonadThrow[F], s: Sync[F]) extends RouteAction[F, TheGuessStartResult, GameError] {
-        override def execute: RouteExecute[F, TheGuessStartResult, GameError] = (req: Request[F]) => {
-          req.as[TheGuessStartParams].flatMap { params =>
-            apply.start(params)
-          }
-        }
+    private def start[F[+_]](implicit s: Sync[F]): RouteAction[F, TheGuessStartResult, GameError] = (req: Request[F]) => {
+      req.as[TheGuessStartParams].flatMap { params =>
+        apply.start(params)
       }
+    }
 
-      class Pick[F[+_]](implicit mt: MonadThrow[F], s: Sync[F]) extends RouteAction[F, TheGuessPickResult, GameError] {
-        override def execute: RouteExecute[F, TheGuessPickResult, GameError] = (req: Request[F]) => {
-          req.as[TheGuessPickParams].flatMap { params =>
-            (for {
-              rightAnswer <- EitherT.fromOption[F](
-                req.cookies.find(_.name == "guess-result").flatMap(_.content.toLongOption),
-                GameErrors.GameNotStarted
-              )
-              result <- EitherT(apply.pick(params, rightAnswer))
-            } yield result).value
-          }
-        }
+    private def pick[F[+_]](implicit s: Sync[F]): RouteAction[F, TheGuessPickResult, GameError] = (req: Request[F]) => {
+      req.as[TheGuessPickParams].flatMap { params =>
+        (for {
+          rightAnswer <- EitherT.fromOption[F](
+            req.cookies.find(_.name == "guess-result").flatMap(_.content.toLongOption),
+            GameErrors.GameNotStarted
+          )
+          result <- EitherT(apply.pick(params, rightAnswer))
+        } yield result).value
       }
-
     }
   }
 
@@ -238,16 +226,12 @@ object GuessServer extends IOApp {
     )
 
     HttpRoutes.of[IO] { req =>
-      (for {
-        route <- router.find(req)
-        result <- Some(route.execute(req))
-      } yield result) match {
-        case Some(result) => result flatMap {
-          case Left(e) => Formatter.formatGameError(e)
+      router.find(req) match {
+        case Some(route) => route(req).flatMap {
+          case Left(e)  => Formatter.formatGameError(e)
           case Right(r) => Formatter.formatGameResult(r)
         }
       }
-
     }
   }
 
