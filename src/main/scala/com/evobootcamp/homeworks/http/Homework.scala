@@ -140,7 +140,7 @@ object Games {
     import io.circe.generic.auto._
     import org.http4s.circe.CirceEntityCodec._
 
-    def routesOf[F[+_]](root: RouteRoot)(implicit mt: MonadThrow[F], s: Sync[F]): List[GameRoute[F, GameActionResponse, GameError]] = {
+    def routesOf[F[+_]](root: RouteRoot)(implicit s: Sync[F]): List[GameRoute[F, GameActionResponse, GameError]] = {
       GameRoute[F, GameActionResponse, GameError](
         {
           case POST -> root.path / "start" => Some(start)
