@@ -95,7 +95,7 @@ object Router {
 
 object WebSocketRouter {
   type WsRouteFind[F[+_], +A, +E] = String => Option[WsRouteAction[F, A, E]]
-  type WsRouteExecute[F[+_], +A, +E] = (String) => (WsSession[F]) => F[Either[E, A]]
+  type WsRouteAction[F[+_], +A, +E] = (String) => (WsSession[F]) => F[Either[E, A]]
 
   final case class IncomingMessage(command: String)
 
@@ -110,10 +110,6 @@ object WebSocketRouter {
 
   trait WsRoute[F[+_], +A, +E] {
     def check: WsRouteFind[F, A, E]
-  }
-
-  trait WsRouteAction[F[+_], +A, +E] {
-    def execute: WsRouteExecute[F, A, E]
   }
 
   trait WsSession[F[_]] {
@@ -254,16 +250,18 @@ object Games {
       ) :: Nil
     }
 
-    def wsRoutesOf[F[+_]](implicit mt: MonadThrow[F], s: Sync[F]): List[WsRoute[F, GameActionResponse, GameError]] = {
+    def wsRoutesOf[F[+_]](implicit s: Sync[F]): List[WsRoute[F, GameActionResponse, GameError]] = {
       WsGameRoute[F, GameActionResponse, GameError]({ command =>
-        Option.when(command == "guess/start")(new TheGuessWsController.Start[F])
+        Option.when(command == "guess/start")(WsController.start)
       }) ::
       WsGameRoute[F, GameActionResponse, GameError]({ command =>
-        Option.when(command == "guess/pick")(new TheGuessWsController.Pick[F])
+        Option.when(command == "guess/pick")(WsController.pick)
       }) :: Nil
     }
 
     def apply: TheGuess = new TheGuess
+
+    private val RESULT_KEY = "guess-result"
 
     private def start[F[+_]](implicit s: Sync[F]): RouteAction[F, TheGuessStartResult, GameError] = (req: Request[F]) => {
       req.as[TheGuessStartParams].flatMap { params =>
@@ -275,7 +273,7 @@ object Games {
       req.as[TheGuessPickParams].flatMap { params =>
         (for {
           rightAnswer <- EitherT.fromOption[F](
-            req.cookies.find(_.name == "guess-result").flatMap(_.content.toLongOption),
+            req.cookies.find(_.name == RESULT_KEY).flatMap(_.content.toLongOption),
             GameErrors.GameNotStarted
           )
           result <- EitherT(apply.pick(params, rightAnswer))
@@ -283,33 +281,25 @@ object Games {
       }
     }
 
-    object TheGuessWsController {
-      import io.circe.generic.auto._
-
-      private val RESULT_KEY = "guess-result"
-
-      class Start[F[+_]](implicit mt: MonadThrow[F], s: Sync[F]) extends WsRouteAction[F, TheGuessStartResult, GameError] {
-        override def execute: WsRouteExecute[F, TheGuessStartResult, GameError]
-        = (msg: String) => (session: WsSession[F]) => {
-          (for {
-            parsed <- EitherT.fromEither[F](io.circe.jawn.decode[TheGuessStartParamsWs](msg)
-              .leftMap[GameError](_ => GameErrors.WrongParams))
-            result <- EitherT(apply.start(parsed.params))
-            _ <- EitherT.right[GameError](session.set[Long](RESULT_KEY, result.result))
-          } yield result).value
-        }
+    object WsController {
+      def start[F[+_]](implicit s: Sync[F]): WsRouteAction[F, TheGuessStartResult, GameError]
+      = (msg: String) => (session: WsSession[F]) => {
+        (for {
+          parsed <- EitherT.fromEither[F](io.circe.jawn.decode[TheGuessStartParamsWs](msg)
+            .leftMap[GameError](_ => GameErrors.WrongParams))
+          result <- EitherT(apply.start(parsed.params))
+          _ <- EitherT.right[GameError](session.set[Long](RESULT_KEY, result.result))
+        } yield result).value
       }
 
-      class Pick[F[+_]](implicit mt: MonadThrow[F], s: Sync[F]) extends WsRouteAction[F, TheGuessPickResult, GameError] {
-        override def execute: WsRouteExecute[F, TheGuessPickResult, GameError]
-        = (msg: String) => (session: WsSession[F]) => {
-          (for {
-            rightAnswer <- EitherT.fromOptionF(session.get[Long](RESULT_KEY), GameErrors.GameNotStarted)
-            parsed      <- EitherT.fromEither[F](io.circe.jawn.decode[TheGuessPickParamsWs](msg)
-              .leftMap[GameError](_ => GameErrors.WrongParams))
-            result      <- EitherT(apply.pick(parsed.params, rightAnswer))
-          } yield result).value
-        }
+      def pick[F[+_]](implicit s: Sync[F]): WsRouteAction[F, TheGuessPickResult, GameError]
+      = (msg: String) => (session: WsSession[F]) => {
+        (for {
+          rightAnswer <- EitherT.fromOptionF(session.get[Long](RESULT_KEY), GameErrors.GameNotStarted)
+          parsed      <- EitherT.fromEither[F](io.circe.jawn.decode[TheGuessPickParamsWs](msg)
+            .leftMap[GameError](_ => GameErrors.WrongParams))
+          result      <- EitherT(apply.pick(parsed.params, rightAnswer))
+        } yield result).value
       }
     }
   }
@@ -408,7 +398,7 @@ object GuessServer extends IOApp {
                 GameErrors.GameNotFound.asInstanceOf[GameError]
               )
               session <- EitherT.right(userSession)
-              result <- EitherT(route.execute(message)(session))
+              result <- EitherT(route(message)(session))
             } yield result).value.unsafeRunSync() match {
               case Left(e) => WebSocketFrame.Text(Formatter.getErrorMessage(e).noSpaces)
               case Right(r) => WebSocketFrame.Text(Formatter.getResultMessage(r).noSpaces)
