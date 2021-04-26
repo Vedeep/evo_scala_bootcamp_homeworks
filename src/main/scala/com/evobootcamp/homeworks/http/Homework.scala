@@ -3,7 +3,9 @@ package com.evobootcamp.homeworks.http
 import io.circe.Json
 import cats.effect.{Blocker, ExitCode, IO, IOApp, Sync}
 import cats._
+import cats.data.EitherT
 import cats.syntax.all._
+
 import scala.annotation.tailrec
 import org.http4s._
 import org.http4s.client.Client
@@ -12,6 +14,7 @@ import org.http4s.client.dsl.io._
 import org.http4s.dsl.io._
 import org.http4s.implicits._
 import org.http4s.server.blaze.BlazeServerBuilder
+
 import scala.concurrent.ExecutionContext
 import scala.util.Try
 
@@ -116,19 +119,22 @@ object Games {
   final case class TheGuessPickResult(result: Long) extends GameActionResponse {}
 
   final class TheGuess private extends Game {
-    def start(params: TheGuessStartParams): Either[GameError, TheGuessStartResult] = {
-      params match {
+    def start[F[_]](params: TheGuessStartParams)(implicit sf: Sync[F]): F[Either[GameError, TheGuessStartResult]] = {
+      Sync[F].pure(params match {
         case TheGuessStartParams(min, max) if min > max => Left(GameErrors.NumberMinMoreMaxError)
         case TheGuessStartParams(min, max) if min == max => Left(GameErrors.NumberMinEqualsMaxError)
         case TheGuessStartParams(min, max) => Right(TheGuessStartResult(min ,max, getRandomNumber(min, max)))
         case _ => Left(GameErrors.WrongParams)
-      }
+      })
     }
 
-    def pick(params: TheGuessPickParams, result: Long): Either[GameError, TheGuessPickResult] = {
-      if (params.num > result) Left(GameErrors.ValueMoreThanResult)
-      else if (params.num < result) Left(GameErrors.ValueLessThanResult)
-      else Right(TheGuessPickResult(result))
+    def pick[F[_]](params: TheGuessPickParams, result: Long)
+    (implicit sf: Sync[F]): F[Either[GameError, TheGuessPickResult]] = {
+      Sync[F].pure(
+        if (params.num > result) Left(GameErrors.ValueMoreThanResult)
+        else if (params.num < result) Left(GameErrors.ValueLessThanResult)
+        else Right(TheGuessPickResult(result))
+      )
     }
 
     def getRandomNumber(min: Long, max: Long): Long = scala.util.Random.between(min, max)
@@ -158,7 +164,7 @@ object Games {
       class Start[F[+_]](implicit mt: MonadThrow[F], s: Sync[F]) extends RouteAction[F, TheGuessStartResult, GameError] {
         override def execute: RouteExecute[F, TheGuessStartResult, GameError] = (req: Request[F]) => {
           req.as[TheGuessStartParams].flatMap { params =>
-            Sync[F].delay(apply.start(params))
+            apply.start(params)
           }
         }
       }
@@ -166,15 +172,13 @@ object Games {
       class Pick[F[+_]](implicit mt: MonadThrow[F], s: Sync[F]) extends RouteAction[F, TheGuessPickResult, GameError] {
         override def execute: RouteExecute[F, TheGuessPickResult, GameError] = (req: Request[F]) => {
           req.as[TheGuessPickParams].flatMap { params =>
-            Sync[F].pure(params).map { params =>
-              req.cookies
-                .find(_.name == "guess-result")
-                .flatMap(_.content.toLongOption)
-                .toRight(GameErrors.GameNotStarted)
-                .flatMap { gameResult =>
-                  apply.pick(params, gameResult)
-                }
-            }
+            (for {
+              rightAnswer <- EitherT.fromOption[F](
+                req.cookies.find(_.name == "guess-result").flatMap(_.content.toLongOption),
+                GameErrors.GameNotStarted
+              )
+              result <- EitherT(apply.pick(params, rightAnswer))
+            } yield result).value
           }
         }
       }
