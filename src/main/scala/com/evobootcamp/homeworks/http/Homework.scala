@@ -2,7 +2,6 @@ package com.evobootcamp.homeworks.http
 
 import io.circe.Json
 import cats.effect.{Blocker, ExitCode, IO, IOApp, Sync}
-import cats._
 import cats.data.EitherT
 import cats.syntax.all._
 
@@ -16,7 +15,6 @@ import org.http4s.implicits._
 import org.http4s.server.blaze.BlazeServerBuilder
 
 import scala.concurrent.ExecutionContext
-import scala.util.Try
 
 // Homework. Place the solution under `http` package in your homework repository.
 //
@@ -35,7 +33,7 @@ import scala.util.Try
 // The exact protocol and message format to use is not specified and should be designed while working on the task.
 
 object Router {
-  type RouteFind[F[+_], +A, +E] = Request[F] => Option[RouteAction[F, A, E]]
+  type RouteFind[F[+_], +A, +E] = PartialFunction[Request[F], Option[RouteAction[F, A, E]]]
   type RouteAction[F[+_], +A, +E] = Request[F] => F[Either[E, A]]
 
   trait Route[F[+_], +A, +E] {
@@ -56,7 +54,8 @@ object Router {
       def recursive(routes: List[Route[F, A, E]]): Option[RouteAction[F, A, E]] = {
         routes match {
           case route :: tail => {
-            Try(route.check(req)).toOption.flatten match {
+            route.check
+            .applyOrElse[Request[F], Option[RouteAction[F, A, E]]](req, _ => None) match {
               case act @ Some(_) => act
               case _ => recursive(tail)
             }
@@ -144,12 +143,12 @@ object Games {
       GameRoute[F, GameActionResponse, GameError](
         {
           case POST -> root.path / "start" => Some(start)
-        },
+        }
       ) ::
       GameRoute[F, GameActionResponse, GameError](
         {
           case POST -> root.path / "pick"  => Some(pick)
-        },
+        }
       ) :: Nil
     }
 
