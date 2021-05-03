@@ -28,12 +28,28 @@ version := "1.0"
 val scalaTestVersion = "3.1.0.0-RC2"
 val catsVersion = "2.2.0"
 val catsEffectVersion = "2.2.0"
+val http4sVersion = "0.21.22"
+val circeVersion = "0.13.0"
+val doobieVersion = "0.9.0"
 
 libraryDependencies += "org.scala-lang.modules" %% "scala-parser-combinators" % "1.1.2"
 libraryDependencies += "org.scalatestplus" %% "scalatestplus-scalacheck" % scalaTestVersion % Test
 libraryDependencies += "org.scalatestplus" %% "selenium-2-45" % scalaTestVersion % Test
 libraryDependencies += "org.typelevel" %% "cats-core" % catsVersion
 libraryDependencies += "org.typelevel" %% "cats-effect" % catsEffectVersion
+libraryDependencies += "org.http4s" %% "http4s-dsl" % http4sVersion
+libraryDependencies += "org.http4s" %% "http4s-blaze-server" % http4sVersion
+libraryDependencies += "org.http4s" %% "http4s-blaze-client" % http4sVersion
+libraryDependencies += "org.http4s" %% "http4s-circe" % http4sVersion
+libraryDependencies += "org.http4s" %% "http4s-jdk-http-client" % "0.3.6"
+libraryDependencies += "io.circe" %% "circe-core" % circeVersion
+libraryDependencies += "io.circe" %% "circe-generic" % circeVersion
+libraryDependencies += "io.circe" %% "circe-generic-extras" % circeVersion
+libraryDependencies += "io.circe" %% "circe-optics" % circeVersion
+libraryDependencies += "io.circe" %% "circe-parser" % circeVersion
+libraryDependencies += "org.tpolecat" %% "doobie-core" % doobieVersion
+libraryDependencies += "org.tpolecat" %% "doobie-h2" % doobieVersion
+libraryDependencies += "org.tpolecat" %% "doobie-hikari" % doobieVersion
 
 // Here, `libraryDependencies` is a set of dependencies, and by using `+=`,
 // we're adding the scala-parser-combinators dependency to the set of dependencies
