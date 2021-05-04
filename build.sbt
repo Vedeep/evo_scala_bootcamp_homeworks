@@ -28,12 +28,23 @@ version := "1.0"
 val scalaTestVersion = "3.1.0.0-RC2"
 val catsVersion = "2.2.0"
 val catsEffectVersion = "2.2.0"
+val akkaVersion = "2.6.9"
+val akkaHttpVersion = "10.1.11"
+val akkaHttpCirceVersion = "1.31.0"
 
 libraryDependencies += "org.scala-lang.modules" %% "scala-parser-combinators" % "1.1.2"
 libraryDependencies += "org.scalatestplus" %% "scalatestplus-scalacheck" % scalaTestVersion % Test
 libraryDependencies += "org.scalatestplus" %% "selenium-2-45" % scalaTestVersion % Test
 libraryDependencies += "org.typelevel" %% "cats-core" % catsVersion
 libraryDependencies += "org.typelevel" %% "cats-effect" % catsEffectVersion
+libraryDependencies += "com.typesafe.akka" %% "akka-http" % akkaHttpVersion
+libraryDependencies += "de.heikoseeberger" %% "akka-http-circe" % akkaHttpCirceVersion
+libraryDependencies += "com.typesafe.akka" %% "akka-stream" % akkaVersion
+libraryDependencies += "com.typesafe.akka" %% "akka-actor" % akkaVersion
+libraryDependencies += "com.typesafe.akka" %% "akka-persistence" % akkaVersion
+libraryDependencies += "com.typesafe.akka" %% "akka-cluster" % akkaVersion
+libraryDependencies += "com.typesafe.akka" %% "akka-cluster-sharding" % akkaVersion
+libraryDependencies += "com.typesafe.akka" %% "akka-testkit" % akkaVersion % Test
 
 // Here, `libraryDependencies` is a set of dependencies, and by using `+=`,
 // we're adding the scala-parser-combinators dependency to the set of dependencies
