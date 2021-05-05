@@ -1,7 +1,6 @@
 package com.evobootcamp.homeworks.akka
 
-import akka.actor.{Actor, ActorRef, OneForOneStrategy, Props, SupervisorStrategy, Terminated}
-import akka.stream.Supervision.Stop
+import akka.actor.{Actor, ActorRef, PoisonPill, Props, Terminated}
 
 object BinaryTreeNode {
   private sealed trait Position
@@ -44,12 +43,11 @@ final class BinaryTreeNode(val elem: Int, initiallyRemoved: Boolean) extends Act
     getPosition(m.elem) match {
       case Some(position) => subtrees.get(position) match {
         case Some(ref) => ref ! m
-        case None => {
-          val ref = context.actorOf(props(m.elem, false), "test-" + m.elem)
+        case None =>
+          val ref = context.actorOf(props(m.elem,  initiallyRemoved = false), "test-" + m.elem)
           context.watch(ref)
           subtrees = subtrees + (position -> ref)
           m.requester ! OperationFinished(m.id)
-        }
       }
       case None => m.requester ! OperationFinished(m.id)
     }
@@ -59,7 +57,7 @@ final class BinaryTreeNode(val elem: Int, initiallyRemoved: Boolean) extends Act
     getPosition(m.elem) match {
       case Some(position) => subtrees.get(position) match {
         case Some(ref) => ref ! m
-        case None => m.requester ! ContainsResult(m.id, false)
+        case None => m.requester ! ContainsResult(m.id, result =  false)
       }
       case None => m.requester ! ContainsResult(m.id, !removed && m.elem == elem)
     }
@@ -72,10 +70,9 @@ final class BinaryTreeNode(val elem: Int, initiallyRemoved: Boolean) extends Act
         case None => m.requester ! OperationFinished(m.id)
       }
 
-      case None => {
+      case None =>
         removed = true
         m.requester ! OperationFinished(m.id)
-      }
     }
   }
 
@@ -94,7 +91,7 @@ final class BinaryTreeNode(val elem: Int, initiallyRemoved: Boolean) extends Act
   }
 
   private def doStopChild(ref: ActorRef): Unit = {
-    context.stop(ref)
+    ref ! PoisonPill
   }
 
   override def postStop(): Unit = {

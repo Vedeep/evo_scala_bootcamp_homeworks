@@ -62,7 +62,9 @@ final class BinaryTreeSet extends Actor {
 
   private def createRoot: ActorRef = context.actorOf(BinaryTreeNode.props(0, initiallyRemoved = true))
 
-  context
+  override def postStop(): Unit = gc.cancel()
+
+  private val gc = context
     .system
     .getScheduler
     .scheduleAtFixedRate(5.seconds, 5.seconds, self, RunGC)
