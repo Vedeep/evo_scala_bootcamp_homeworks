@@ -1,7 +1,6 @@
 package com.evobootcamp.homeworks.akka
 
 import akka.actor._
-import com.evobootcamp.homeworks.akka.BinaryTreeSet.Operation.CleanupRemoved
 
 import scala.concurrent.duration._
 
@@ -24,10 +23,6 @@ object BinaryTreeSet {
 
     // remove the element `elem` from the tree
     final case class Remove(requester: ActorRef, id: Int, elem: Int) extends Operation
-
-    // garbage collector
-    final case class CleanupRemoved(requester: ActorRef)
-    final case class StopChild(ref: ActorRef)
   }
 
   sealed trait OperationReply {
@@ -41,24 +36,48 @@ object BinaryTreeSet {
 
     // successful completion of an insert or remove operation
     final case class OperationFinished(id: Int) extends OperationReply
-
-    // successful cleaned
-    final case class CleanupFinished(id: Int, ref: ActorRef, removed: Boolean) extends OperationReply
   }
 
-  object RunGC
+  object GarbageCollector {
+    case object RunGC
+
+    final case class Cleanup(elems: List[Int])
+    final case class CleanupFinished(elems: List[Int])
+  }
 }
 
-final class BinaryTreeSet extends Actor {
+final class BinaryTreeSet extends Actor with Stash {
   import BinaryTreeSet._
+  import BinaryTreeSet.Operation._
+  import BinaryTreeSet.OperationReply._
+  import BinaryTreeSet.GarbageCollector._
+
   import context.dispatcher
 
   private val root = createRoot
 
-  override def receive: Receive = {
+  private def active: Receive = {
     case m: Operation => root ! m
-    case RunGC => root ! CleanupRemoved(self)
+
+    case _: OperationFinished => ()
+
+    case RunGC =>
+      context.become(stashing)
+      root ! Cleanup(Nil)
   }
+
+  private def stashing: Receive = {
+    case _: Operation => stash()
+
+    case _: OperationFinished => ()
+
+    case CleanupFinished(elems) =>
+      elems.foreach(root ! Insert(self, -1, _))
+      context.become(active)
+      unstashAll()
+  }
+
+  override def receive: Receive = active
 
   private def createRoot: ActorRef = context.actorOf(BinaryTreeNode.props(0, initiallyRemoved = true))
 

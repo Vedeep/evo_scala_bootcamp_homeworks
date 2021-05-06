@@ -1,6 +1,7 @@
 package com.evobootcamp.homeworks.akka
 
 import akka.actor.{Actor, ActorRef, PoisonPill, Props, Terminated}
+import com.evobootcamp.homeworks.akka.BinaryTreeSet.GarbageCollector.{Cleanup, CleanupFinished}
 
 object BinaryTreeNode {
   private sealed trait Position
@@ -22,15 +23,12 @@ final class BinaryTreeNode(val elem: Int, initiallyRemoved: Boolean) extends Act
   private var removed = initiallyRemoved
 
   override def receive: Receive = {
-    case msg @ Insert(_, _, _)   => doInsert(msg)
-    case msg @ Contains(_, _, _) => doContains(msg)
-    case msg @ Remove(_, _, _)   => doRemove(msg)
+    case msg: Insert   => doInsert(msg)
+    case msg: Contains => doContains(msg)
+    case msg: Remove   => doRemove(msg)
 
-    case msg @ CleanupRemoved(_) => doCleanup(msg)
-    case Terminated(ref) => doRemoveChild(ref)
-    case StopChild(ref) =>
-      doRemoveChild(ref)
-      doStopChild(ref)
+    case msg: Cleanup         => doCleanup(msg)
+    case msg: CleanupFinished => onCleanupFinished(msg)
   }
 
   private def getPosition(e: Int): Option[Position] = {
@@ -45,7 +43,6 @@ final class BinaryTreeNode(val elem: Int, initiallyRemoved: Boolean) extends Act
         case Some(ref) => ref ! m
         case None =>
           val ref = context.actorOf(props(m.elem,  initiallyRemoved = false), "test-" + m.elem)
-          context.watch(ref)
           subtrees = subtrees + (position -> ref)
           m.requester ! OperationFinished(m.id)
       }
@@ -76,22 +73,32 @@ final class BinaryTreeNode(val elem: Int, initiallyRemoved: Boolean) extends Act
     }
   }
 
-  private def doCleanup(m: CleanupRemoved): Unit = {
-    if (removed && !isRoot) {
-      context.parent ! StopChild(self)
+  private def cleanupChild(elems: List[Int]): Unit = {
+    subtrees.values.take(1).foreach(_ ! Cleanup(elems))
+  }
+
+  private def doCleanup(m: Cleanup): Unit = {
+    val newElems = if (removed) m.elems else elem :: m.elems
+
+    if (subtrees.nonEmpty) {
+      cleanupChild(newElems)
     } else {
-      subtrees.values.foreach(_ ! m)
+      onCleanupFinished(CleanupFinished(newElems))
     }
   }
 
-  private def doRemoveChild(ref: ActorRef): Unit = {
-    subtrees = subtrees.filterNot({
-      case (_, actRef) => actRef == ref
-    })
-  }
+  private def onCleanupFinished(m: CleanupFinished): Unit = {
+    subtrees = subtrees.drop(1)
 
-  private def doStopChild(ref: ActorRef): Unit = {
-    ref ! PoisonPill
+    if (subtrees.isEmpty) {
+      if (!isRoot) {
+        context.stop(self)
+      }
+
+      context.parent ! m
+    } else {
+      cleanupChild(m.elems)
+    }
   }
 
   override def postStop(): Unit = {

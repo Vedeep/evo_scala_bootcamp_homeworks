@@ -4,6 +4,7 @@ import akka.actor.{ActorSystem, Props}
 import akka.testkit.{ImplicitSender, TestKit, TestProbe}
 import com.evobootcamp.homeworks.akka.BinaryTreeSet.Operation._
 import com.evobootcamp.homeworks.akka.BinaryTreeSet.OperationReply._
+import com.evobootcamp.homeworks.akka.BinaryTreeSet.GarbageCollector._
 import com.evobootcamp.homeworks.akka.BinaryTreeSet._
 import org.scalatest.flatspec.AnyFlatSpec
 
@@ -69,10 +70,10 @@ class BinaryTreeSpec extends AnyFlatSpec {
 
       topNode ! Insert(testActor, id = 1, 1)
       expectMsg(OperationFinished(1))
-      topNode ! Insert(testActor, id = 2, 2)
-      expectMsg(OperationFinished(2))
       topNode ! Insert(testActor, id = 3, 3)
       expectMsg(OperationFinished(3))
+      topNode ! Insert(testActor, id = 2, 2)
+      expectMsg(OperationFinished(2))
       topNode ! Insert(testActor, id = 4, 4)
       expectMsg(OperationFinished(4))
 
@@ -89,8 +90,11 @@ class BinaryTreeSpec extends AnyFlatSpec {
 
       Thread.sleep(100)
 
-      topNode ! Contains(testActor, id = 7, 4)
-      expectMsg(ContainsResult(7, false))
+      topNode ! Contains(testActor, id = 8, 3)
+      expectMsg(ContainsResult(8, false))
+
+      topNode ! Contains(testActor, id = 9, 4)
+      expectMsg(ContainsResult(9, true))
     }
 
     def verify(probe: TestProbe,
